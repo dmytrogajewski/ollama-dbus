@@ -1,5 +1,7 @@
 # Ollama D-Bus
 
+<img src="https://github.com/dmytrogajewski/ollama-dbus/raw/main/assets/banner.png" width="800">
+
 Ollama D-Bus is just my experimental implementation of a GNOME search provider.
 It uses the **Ollama Gemma2:2b model** to provide prompted search results in GNOME environments.
 

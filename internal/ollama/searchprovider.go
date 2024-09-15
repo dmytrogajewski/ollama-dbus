@@ -1,6 +1,7 @@
 package ollama
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -13,16 +14,13 @@ import (
 
 const busName = "com.ollama"
 const objectPath = "/com/ollama/SearchProvider"
-const systemPromt = "Suggest what Fedora linux user is trying to find. Recommend relevant applications as a list. Do not use markdown in answer"
+const systemPromt = "Give short 300 character response. Answer with just a list of apps. Suggest what Fedora linux user is trying to find. Recommend relevant applications as a list. Do not use markdown in answer. User request:"
 
 type SearchProvider struct {
 	logger       *slog.Logger
 	debounceTime time.Duration
-	sm           chan struct{}
-	searchChan   chan []string
-	resultChan   chan string
 	client       *ollamaclient.Config
-	timer        *time.Timer
+	cancelFn     context.CancelFunc
 	mu           sync.RWMutex
 }
 
@@ -30,13 +28,10 @@ func NewSearchProvider(debounceTime time.Duration, modelName string, l *slog.Log
 	client := ollamaclient.New()
 	client.ModelName = modelName
 	client.Verbose = true
-
 	sp := &SearchProvider{
-		client:     client,
-		searchChan: make(chan []string),
-		resultChan: make(chan string),
-		sm:         make(chan struct{}, 1),
-		logger:     l,
+		client:       client,
+		logger:       l,
+		debounceTime: debounceTime,
 	}
 
 	return sp
@@ -48,34 +43,40 @@ func (sp *SearchProvider) Serve(conn *dbus.Conn) error {
 	if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
 		return fmt.Errorf("Failed to request name: %v", err)
 	}
+
 	sp.logger.Info(fmt.Sprintf("code=%v", reply))
 	conn.Export(sp, objectPath, "org.gnome.Shell.SearchProvider2")
 
-	sp.sm <- struct{}{}
 	return nil
 }
 
 func (sp *SearchProvider) GetInitialResultSet(terms []string) ([]string, *dbus.Error) {
 	sp.logger.Info(fmt.Sprintf("Got terms from D-Bus: %s\n", strings.Join(terms, " ")))
-	sp.logger.Info(fmt.Sprintf("worker start %s\n", strings.Join(terms, " ")))
-	<-sp.sm
+
+	if sp.cancelFn != nil {
+		sp.cancelFn()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sp.mu.Lock()
+	sp.cancelFn = cancel
+	sp.mu.Unlock()
 
 	select {
-	case <-sp.sm:
-		sp.logger.Info(fmt.Sprintf("stop search: %s\n", strings.Join(terms, " ")))
-		sp.sm <- struct{}{}
+	case <-ctx.Done():
 		return []string{"Thinking..."}, nil
 	case <-time.After(sp.debounceTime):
-		sp.logger.Info(fmt.Sprintf("time tick: %s\n", strings.Join(terms, " ")))
-		sp.sm <- struct{}{}
 		return []string{sp.performSearch(terms)}, nil
 	}
 }
 
 func (sp *SearchProvider) performSearch(terms []string) string {
 	sp.logger.Info(fmt.Sprintf("Performing search with Ollama: %s\n", strings.Join(terms, " ")))
-	promt := append(strings.Split(systemPromt, " "), terms...)
-	result, err := sp.client.GetOutput(promt...)
+	promt := fmt.Sprintf("%s %s", systemPromt, strings.Join(terms, " "))
+	result, err := sp.client.GetOutput(promt)
+
+	sp.logger.Info(result)
 
 	if err != nil {
 		sp.logger.Info(fmt.Sprintf("failed to perfom search using Ollama Search Provider: %v", err.Error()))
