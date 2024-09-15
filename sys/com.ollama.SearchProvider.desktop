@@ -1,0 +1,12 @@
+[Desktop Entry]
+
+Name=Ollama
+Comment=Ollama LLM inference
+Exec=ollama %U
+Icon=${INTALL_PATH}/ollama-dbus/assets/ollama.xpm
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Development;
+MimeType=application/x-cd-image;
+DBusActivatable=true
